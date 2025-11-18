@@ -1,0 +1,106 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Install and Configure Zabbix Server on Ubuntu 22.04
+  hosts: zabbix-server
+  become: yes
+  vars:
+    zabbix_db_password: "123456789"
+    zabbix_server_ip: "{{ hostvars['zabbix-server']['ansible_host'] | default(inventory_hostname) }}"
+    postgres_user: postgres
+
+  tasks:
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+    - name: Install psycopg2 Python library for PostgreSQL interaction and acl
+      apt:
+        name:
+            - python3-psycopg2
+            - acl
+        state: present
+
+    - name: Install PostgreSQL
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+        state: present
+
+    - name: Start and enable PostgreSQL service
+      systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Create Zabbix database user
+      become_user: postgres
+      postgresql_user:
+        name: zabbix
+        password: "{{ zabbix_db_password }}"
+        role_attr_flags: LOGIN
+        state: present
+
+    - name: Create Zabbix database
+      become_user: postgres
+      postgresql_db:
+        name: zabbix
+        owner: zabbix
+        state: present
+
+    - name: Add Zabbix repository
+      get_url:
+        url: https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu22.04_all.deb
+        dest: /tmp/zabbix-release_latest_7.0+ubuntu22.04_all.deb
+
+    - name: Install Zabbix repository package
+      apt:
+        deb: /tmp/zabbix-release_latest_7.0+ubuntu22.04_all.deb
+        state: present
+      ignore_errors: yes
+
+    - name: Update apt cache after adding repo
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix server, frontend, agent, and Apache
+      apt:
+        name:
+          - zabbix-server-pgsql
+          - zabbix-frontend-php
+          - php8.1-pgsql
+          - zabbix-apache-conf
+          - zabbix-sql-scripts
+          - zabbix-agent
+        state: present
+
+    - name: Import initial Zabbix schema and data
+      shell: zcat /usr/share/zabbix-sql-scripts/postgresql/server.sql.gz | sudo -u zabbix psql zabbix
+      ignore_errors: yes
+
+    - name: Configure Zabbix server database password
+      lineinfile:
+        path: /etc/zabbix/zabbix_server.conf
+        regexp: "^DBPassword="
+        line: "DBPassword={{ zabbix_db_password }}"
+        backup: yes
+
+    - name: Restart Zabbix server and agent services
+      systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: yes
+      loop:
+        - zabbix-server
+        - zabbix-agent
+        - apache2
+
+    - name: Ensure Apache is running
+      systemd:
+        name: apache2
+        state: started
+        enabled: yes
+
+    - name: Display Zabbix web interface URL
+      debug:
+        msg: "Zabbix Web UI доступен по адресу: http://{{ zabbix_server_ip }}/zabbix"

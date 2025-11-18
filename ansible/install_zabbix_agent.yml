@@ -1,0 +1,53 @@
+#!/usr/bin/ansible-playbook
+---
+- name: Install and Configure Zabbix Agent on Ubuntu 22.04
+  hosts: zabbix-host
+  become: yes
+  vars:
+    zabbix_server_ip: "{{ hostvars['zabbix-server']['ansible_host'] | default(inventory_hostname) }}"
+
+  tasks:
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Add Zabbix repository
+      get_url:
+        url: https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_7.0-1+ubuntu22.04_all.deb
+        dest: /tmp/zabbix-release_latest_7.0+ubuntu22.04_all.deb
+
+    - name: Install Zabbix repository package
+      apt:
+        deb: /tmp/zabbix-release_latest_7.0+ubuntu22.04_all.deb
+        state: present
+
+    - name: Update apt cache after adding repo
+      apt:
+        update_cache: yes
+
+    - name: Install Zabbix agent
+      apt:
+        name: zabbix-agent
+        state: present
+
+    - name: Configure Zabbix agent (Server and ServerActive)
+      lineinfile:
+        path: /etc/zabbix/zabbix_agentd.conf
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+        backup: yes
+      loop:
+        - { key: "Server", value: "{{ zabbix_server_ip }}" }
+        - { key: "ServerActive", value: "{{ zabbix_server_ip }}" }
+        - { key: "Hostname", value: "{{ inventory_hostname }}" }
+
+    - name: Restart Zabbix agent service
+      systemd:
+        name: zabbix-agent
+        state: restarted
+        enabled: yes
+
+    - name: Show agent configuration summary
+      debug:
+        msg: "Агент на {{ inventory_hostname }} настроен для подключения к серверу: {{ zabbix_server_ip }}"
